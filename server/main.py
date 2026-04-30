@@ -62,5 +62,32 @@ async def graph_statistics(ctx: Context) -> dict[str, int]:
         return dict(records[0])
     return {"nodes": 0, "relationships": 0}
 
+@mcp.tool()
+async def query_specific_genre(genre: str, limit: int = 10, ctx: Context = None) -> dict[str, list]:
+    """Query movies by a specific genre.
+    
+    Args:
+        genre: The genre name to filter by (e.g., "Action", "Comedy")
+    
+    Returns:
+        A dictionary containing the list of movies in that genre.
+    """
+    driver: AsyncDriver = ctx.request_context.lifespan_context.driver
+    database = ctx.request_context.lifespan_context.database
+    
+    await ctx.info(message=f"Querying movies for genre: {genre}")
+    records, summary, keys = await driver.execute_query(
+       """
+MATCH (m:Movie)-[:IN_GENRE]-(g:Genre) WHERE g.name = $genre RETURN m.title AS title, m.year AS year, m.imdbRating AS rating LIMIT $limit""",
+        limit=limit,
+        genre=genre,
+        database_=database
+    )
+
+    movies = [dict(record) for record in records]
+    return {"movies": movies}
+
+
+
 if __name__ == "__main__":
     mcp.run(transport="streamable-http")
