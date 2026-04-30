@@ -42,6 +42,117 @@ async def app_lifespan(server: FastMCP) -> AsyncIterator[AppContext]:
 mcp = FastMCP("Movies GraphRAG Server", lifespan=app_lifespan)
 
 
+@mcp.tool()
+async def list_movies_by_genre(genre: str, ctx: Context, cursor: str ="0", total_page: int =20) -> dict:
+    """
+    Get paginated movies list by genre.
+
+    Args:
+        genre: The genre of the Movie.
+    
+    Returns:
+        A dictionary that contains list of movies with details, current_page that already fetched movies, next_cursor is specify next limit when user request more movie.
+    """
+    driver = ctx.request_context.lifespan_context.driver
+    database = ctx.request_context.lifespan_context.database
+    skip = int(cursor)
+    
+    result, _, _ = await driver.execute_query(
+        """MATCH (m:Movie)-[:IN_GENRE]-(g:Genre) WHERE g.name = $genre ORDER BY m.title RETURN m.title AS title, m.released AS released_at, m.imdbRating AS rating SKIP $skip LIMIT $limit """
+    ,
+    skip=skip,
+    genre=genre,
+    limit=total_page,
+    database_ = database
+    )
+    
+    movies = [dict(record) for record in result]
+    
+    return {
+        "movies": movies,
+        "current_page": skip + total_page,
+        "next_cursor": (skip + total_page * 2)
+    }
+
+
+
+
+@mcp.resource("movie://{tmdb_id}")
+async def get_movie(tmdb_id: str, ctx: Context) -> str:
+    """
+    Get detailed information about a specific movie by TMDB ID.
+
+    Args:
+        tmdb_id: The TMDB ID of the movie (e.g., "603" for The Matrix)
+
+    Returns:
+        Formatted string with movie details including title, plot, cast, and genres
+    """
+    await ctx.info(f"Fetching movie details for TMDB ID: {tmdb_id}")
+
+    context = ctx.request_context.lifespan_context
+
+    try:
+        records, _, _ = await context.driver.execute_query(
+            """
+            MATCH (m:Movie {tmdbId: $tmdb_id})
+            RETURN m.title AS title,
+               m.released AS released,
+               m.tagline AS tagline,
+               m.runtime AS runtime,
+               m.plot AS plot,
+               [ (m)-[:IN_GENRE]->(g:Genre) | g.name ] AS genres,
+               [ (p)-[r:ACTED_IN]->(m) | {name: p.name, role: r.role} ] AS actors,
+               [ (d)-[:DIRECTED]->(m) | d.name ] AS directors
+            """,
+            tmdb_id=tmdb_id,
+            database_=context.database
+        )
+
+        if not records:
+            await ctx.warning(f"Movie with TMDB ID {tmdb_id} not found")
+            return f"Movie with TMDB ID {tmdb_id} not found in database"
+
+        movie = records[0].data()
+
+        # Format the output
+        output = []
+        output.append(f"# {movie['title']} ({movie['released']})")
+        output.append("")
+
+        if movie['tagline']:
+            output.append(f"_{movie['tagline']}_")
+            output.append("")
+
+        output.append(f"**Runtime:** {movie['runtime']} minutes")
+        output.append(f"**Genres:** {', '.join(movie['genres'])}")
+
+        if movie['directors']:
+            output.append(f"**Director(s):** {', '.join(movie['directors'])}")
+
+        output.append("")
+        output.append("## Plot")
+        output.append(movie['plot'])
+
+        if movie['actors']:
+            output.append("")
+            output.append("## Cast")
+            for actor in movie['actors']:
+                if actor['role']:
+                    output.append(f"- {actor['name']} as {actor['role']}")
+                else:
+                    output.append(f"- {actor['name']}")
+
+        result = "\n".join(output)
+
+        await ctx.info(f"Successfully fetched details for '{movie['title']}'")
+
+        return result
+
+    except Exception as e:
+        await ctx.error(f"Failed to fetch movie: {str(e)}")
+        raise
+
 # 4. Access the driver in your tools
 @mcp.tool()
 async def graph_statistics(ctx: Context) -> dict[str, int]:
@@ -61,32 +172,6 @@ async def graph_statistics(ctx: Context) -> dict[str, int]:
     if records:
         return dict(records[0])
     return {"nodes": 0, "relationships": 0}
-
-@mcp.tool()
-async def query_specific_genre(genre: str, limit: int = 10, ctx: Context = None) -> dict[str, list]:
-    """Query movies by a specific genre.
-    
-    Args:
-        genre: The genre name to filter by (e.g., "Action", "Comedy")
-    
-    Returns:
-        A dictionary containing the list of movies in that genre.
-    """
-    driver: AsyncDriver = ctx.request_context.lifespan_context.driver
-    database = ctx.request_context.lifespan_context.database
-    
-    await ctx.info(message=f"Querying movies for genre: {genre}")
-    records, summary, keys = await driver.execute_query(
-       """
-MATCH (m:Movie)-[:IN_GENRE]-(g:Genre) WHERE g.name = $genre RETURN m.title AS title, m.year AS year, m.imdbRating AS rating LIMIT $limit""",
-        limit=limit,
-        genre=genre,
-        database_=database
-    )
-
-    movies = [dict(record) for record in records]
-    return {"movies": movies}
-
 
 
 if __name__ == "__main__":
