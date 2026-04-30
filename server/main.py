@@ -48,11 +48,13 @@ async def graph_statistics(ctx: Context) -> dict[str, int]:
     """Count the number of nodes and relationships in the graph."""
 
     # Access the driver from lifespan context
-    driver = ctx.request_context.lifespan_context.driver
+    driver: AsyncDriver = ctx.request_context.lifespan_context.driver
+    database = ctx.request_context.lifespan_context.database
 
     # Use the driver to query Neo4j
     records, summary, keys = await driver.execute_query(
         "RETURN COUNT {()} AS nodes, COUNT {()-[]-()} AS relationships"
+        ,database_=database
     )
 
     # Process the results
